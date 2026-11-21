@@ -2,6 +2,11 @@
 
 Admin-only oil collection and trading website based on OilFlow APK 1.0.3. Frontend: responsive HTML/CSS/JavaScript with Vite. Backend: Node.js/Express. Database: real MongoDB with separate business collections and atomic transactions.
 
+## Screenshots
+
+![OilFlow dashboard](docs/screenshots/oilflow-dashboard.png)
+
+The capture shows the running local admin dashboard connected to MongoDB. It is an empty demo workspace; no real customer or transaction records are included.
 ## Quick start in VS Code (Windows)
 
 Install **Node.js LTS 22 or newer** from https://nodejs.org, then reopen VS Code. Extract this ZIP and open the **oilflow-web** folder containing package.json.
