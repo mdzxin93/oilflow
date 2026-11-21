@@ -1,0 +1,8 @@
+let csrf='',user=null;
+export function setAuth(value){csrf=value.csrf||'';user=value.user||null;}
+export const currentUser=()=>user;
+export async function api(path,method='GET',data){let response;try{response=await fetch('/api'+path,{method,credentials:'same-origin',headers:{...(data?{'Content-Type':'application/json'}:{}),'X-OilFlow-Client':'web',...(csrf?{'X-CSRF-Token':csrf}:{})},...(data?{body:JSON.stringify(data)}:{})});}catch{window.dispatchEvent(new CustomEvent('oilflow:connection',{detail:false}));throw Error('Cannot reach the backend. Check that npm run dev is still running. Nothing was saved.');}window.dispatchEvent(new CustomEvent('oilflow:connection',{detail:response.status<500}));const result=await response.json().catch(()=>({error:'Unexpected server response'}));if(!response.ok){if(response.status===401)window.dispatchEvent(new Event('oilflow:signedout'));const error=Error(result.error||'Request failed');error.status=response.status;throw error;}return result;}
+export async function login(email,password){const result=await api('/auth/login','POST',{email,password});setAuth(result);return result;}
+export async function authStatus(){const result=await api('/auth/me');setAuth(result);return result;}
+export async function logout(){await api('/auth/logout','POST',{});setAuth({});}
+export async function downloadReport(month,year=false){const response=await fetch('/api/reports/pdf?month='+encodeURIComponent(month)+'&year='+year,{credentials:'same-origin',headers:{'X-OilFlow-Client':'web'}});if(!response.ok){const data=await response.json();throw Error(data.error||'Report failed');}return new Uint8Array(await response.arrayBuffer());}

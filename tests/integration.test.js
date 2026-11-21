@@ -1,0 +1,48 @@
+import {test,before,after} from 'node:test';
+import assert from 'node:assert/strict';
+import request from 'supertest';
+import {MongoMemoryReplSet} from 'mongodb-memory-server-core';
+import {randomUUID} from 'node:crypto';
+import {connectDatabase} from '../server/database.js';
+import {createApp} from '../server/app.js';
+import {totals} from '../shared/engine.js';
+let repl,store,service,agent,csrf,revision=0,cid,cookie;
+const options={secret:'test-session-secret-'.repeat(4),adminEmail:'admin@oilflow.test',adminPassword:'A-real-test-password-987',worker:false,production:false};
+const at=()=>new Date(Date.now()-1000).toISOString();
+async function cmd(type,payload,override={}){return agent.post('/api/commands').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({type,payload,revision,key:randomUUID(),...override});}
+before(async()=>{process.env.MONGOMS_DOWNLOAD_IGNORE_MISSING_HEADER='true';repl=await MongoMemoryReplSet.create({binary:{version:'8.0.16',downloadDir:process.cwd()+'/.cache/mongodb',...(process.env.TEST_MONGODB_BINARY?{systemBinary:process.env.TEST_MONGODB_BINARY}:{})},instanceOpts:[{args:process.platform==='win32'?[]:['--nounixsocket']}],replSet:{count:1,storageEngine:'wiredTiger'}});store=await connectDatabase(repl.getUri(),'oilflow_integration');service=await createApp(store,options);agent=request.agent(service.app);}, {timeout:240000});
+after(async()=>{if(service)await service.close();if(store)await store.close();if(repl)await repl.stop();});
+test('real MongoDB + authenticated business workflow',async()=>{
+ assert.equal((await request(service.app).get('/api/state')).status,401);
+ assert.equal((await agent.post('/api/auth/login').send({email:options.adminEmail,password:options.adminPassword})).status,403);
+ const denied=await agent.post('/api/auth/login').set('X-OilFlow-Client','web').send({email:options.adminEmail,password:'Wrong-password'});assert.equal(denied.status,401);
+ const login=await agent.post('/api/auth/login').set('X-OilFlow-Client','web').send({email:options.adminEmail,password:options.adminPassword});assert.equal(login.status,200);csrf=login.body.csrf;cookie=login.headers['set-cookie'][0].split(';')[0];
+ assert.equal((await agent.post('/api/commands').set('X-OilFlow-Client','web').send({type:'customer.create',payload:{},revision:0,key:randomUUID()})).status,403);
+ const c=await cmd('customer.create',{name:'Supplier <script>safe</script>',phone:'9876543210',address:'Mysuru',openingType:'none',opening:'0',advanceType:'paid',advance:'2000',at:new Date(Date.now()-3600000).toISOString()});assert.equal(c.status,200,JSON.stringify(c.body));cid=c.body.result.id;revision=c.body.state.revision;
+ const payload={customer:cid,kind:'purchase',category:'a',litres:'65',mode:'custom',manualRate:'52',advance:'2000',paid:'0',method:'cash',at:at(),note:'Custom rate',reminder:'none'},key=randomUUID(),prior=revision;
+ const e=await cmd('entry.create',payload,{key});assert.equal(e.status,200,JSON.stringify(e.body));revision=e.body.state.revision;assert.equal(e.body.state.entries[0].total,338000);assert.equal(e.body.state.entries[0].rate,5200);assert.equal(totals(e.body.state).payable,138000);
+ const retry=await cmd('entry.create',payload,{revision:prior,key});assert.equal(retry.status,200);assert.equal(retry.body.duplicate,true);assert.equal(retry.body.state.entries.length,1);
+ const tamper=await cmd('entry.create',{...payload,total:1});assert.equal(tamper.status,400);
+ const over=await cmd('payment.create',{customer:cid,kind:'pay',amount:'9999',at:at(),method:'cash',note:''});assert.equal(over.status,400);assert.equal((await store.read()).revision,revision);
+ const sale=await cmd('entry.create',{...payload,kind:'sale',litres:'100',advance:'0',manualRate:'60'});assert.equal(sale.status,400);
+ const pay=await cmd('payment.create',{customer:cid,kind:'pay',amount:'1380',at:at(),method:'upi',note:'Settlement'});assert.equal(pay.status,200);revision=pay.body.state.revision;assert.equal(totals(pay.body.state).payable,0);
+ const blocked=await cmd('entry.delete',{id:e.body.result.id,reason:'No silent deletion of independent payment',keepPaymentAsAdvance:false});assert.equal(blocked.status,400);
+ const another=await cmd('entry.create',{...payload,litres:'10',manualRate:'52',advance:'0',paid:'520'});assert.equal(another.status,200);revision=another.body.state.revision;const deleteId=another.body.result.id;
+ const del=await cmd('entry.delete',{id:deleteId,reason:'Duplicate',keepPaymentAsAdvance:false});assert.equal(del.status,200);revision=del.body.state.revision;assert.equal(del.body.state.entries.find(x=>x.id===deleteId).deleted,true);assert.equal(totals(del.body.state).stock,65000);
+ const month=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit'}).format(new Date()).slice(0,7);
+ const report=await agent.get('/api/reports/pdf?month='+month);assert.equal(report.status,200,JSON.stringify(report.body));assert.equal(report.headers['content-type'],'application/pdf');assert.ok(report.body.length>1500);revision=(await store.read()).revision;
+ const accountant=await agent.post('/api/accountant').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({period:'month',question:0});assert.equal(accountant.status,200);assert.match(accountant.body.source,/MongoDB/);
+ const cleanup=await cmd('cleanup.temporary',{});assert.equal(cleanup.status,400);
+ const snapshot=await store.read(),verify=await agent.post('/api/backup/verify').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({state:snapshot});assert.equal(verify.status,200);assert.equal(verify.body.same,true);
+ const cleaned=await cmd('cleanup.temporary',{});assert.equal(cleaned.status,200);revision=cleaned.body.state.revision;
+ assert.equal(await store.db.collection('customers').countDocuments(),1);assert.equal(await store.db.collection('entries').countDocuments(),2);assert.ok(await store.db.collection('audit').countDocuments()>5);assert.equal((await store.db.collection('metadata').findOne({_id:'business'})).revision,revision);
+ const racePayload={type:'expense',kind:'Transport',amount:'10',at:at(),note:'Concurrency test'},race=await Promise.all([cmd('record.create',racePayload),cmd('record.create',racePayload)]);assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);revision=(await store.read()).revision;
+ const backup=await store.read();backup.settings.pin={salt:'mobile',hash:'ignored'};const checked=await agent.post('/api/backup/verify').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({state:backup});assert.equal(checked.status,200);
+ const refused=await agent.post('/api/backup/restore').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({state:backup,token:'wrong-token',confirmation:'REPLACE DATABASE'});assert.equal(refused.status,403);
+ const restored=await agent.post('/api/backup/restore').set('X-OilFlow-Client','web').set('X-CSRF-Token',csrf).send({state:backup,token:checked.body.token,confirmation:'REPLACE DATABASE'});assert.equal(restored.status,200,JSON.stringify(restored.body));assert.equal(restored.body.state.settings.pin,undefined);
+ const expectedEntries=restored.body.state.entries.length,uri=repl.getUri();await service.close();await store.close();store=await connectDatabase(uri,'oilflow_integration');service=await createApp(store,options);
+ const reopened=await request(service.app).get('/api/state').set('Cookie',cookie);assert.equal(reopened.status,200);assert.equal(reopened.body.state.entries.length,expectedEntries);assert.equal(reopened.body.state.entries[0].total,338000);
+ assert.equal((await request(service.app).get('/api/health')).body.database,'MongoDB');
+});
+
+test('website UI performs authenticated MongoDB actions end-to-end through real API',async()=>{const {checkUi}=await import('./ui-helper.js');await checkUi(service.app,options,store.db);});

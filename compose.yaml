@@ -1,0 +1,15 @@
+services:
+  mongodb:
+    image: mongo:8.0.16
+    command: ["mongod", "--replSet", "oilflow-rs", "--bind_ip_all"]
+    ports:
+      - "127.0.0.1:27018:27017"
+    volumes:
+      - oilflow_mongo:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id: \"oilflow-rs\", members: [{_id: 0, host: \"localhost:27017\"}]}); }'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+volumes:
+  oilflow_mongo:

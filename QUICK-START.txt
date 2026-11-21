@@ -1,0 +1,23 @@
+OILFLOW WEBSITE + MONGODB — VS CODE
+
+1. Install Node.js LTS 22+ from https://nodejs.org
+2. Extract the ZIP. Open the oilflow-web folder in VS Code.
+3. Open Terminal > New Terminal and run:
+
+   npm install
+   npm run setup
+   npm run dev
+
+4. Setup mein apna admin email/password choose karein.
+5. Open http://localhost:5173 and sign in.
+
+MongoDB automatically starts on localhost:27018. First run official database binary download karega; uske liye internet chahiye. Business data data/mongo mein permanently save hota hai. MongoDB Compass install karna compulsory nahi hai.
+
+Compass URI:
+mongodb://127.0.0.1:27018/oilflow?replicaSet=oilflow-rs&directConnection=true
+
+Windows par Start-Windows.cmd bhi double-click kar sakte hain after installing Node. PowerShell npm.ps1 block kare to npm.cmd use karein, ya VS Code terminal ko Command Prompt par switch karein.
+
+Terminal band hoga to website/reminder backend band hoga. Dobara npm run dev se wahi saved database reopen hoga. .env / data folder private rakhein, aur backup regularly download karein.
+
+Full setup, APK backup import, reports, notifications and troubleshooting: README.md.

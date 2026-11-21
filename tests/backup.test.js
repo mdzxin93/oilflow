@@ -1,0 +1,3 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {encrypt,decrypt,digest} from '../shared/crypto.js';
+test('encrypted export roundtrip and tamper rejection',async()=>{const b=new TextEncoder().encode('OilFlow private ledger');const x=await encrypt(b,'LongPassword123');assert.notDeepEqual(x,b);const d=await decrypt(x,'LongPassword123');assert.deepEqual(d,b);assert.equal(await digest(d),await digest(b));await assert.rejects(decrypt(x,'WrongPassword123'));x[x.length-1]^=1;await assert.rejects(decrypt(x,'LongPassword123'));});
+test('short passwords rejected',async()=>{await assert.rejects(encrypt(new Uint8Array([1,2]),'123'));});

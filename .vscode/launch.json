@@ -1,0 +1,1 @@
+{"version":"0.2.0","configurations":[{"name":"OilFlow backend (database must be running)","type":"node","request":"launch","program":"${workspaceFolder}/server/index.js","cwd":"${workspaceFolder}","envFile":"${workspaceFolder}/.env","skipFiles":["<node_internals>/**"]}]}
